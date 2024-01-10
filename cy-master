@@ -80,10 +80,15 @@ except NameError:
     __file__ = ''
 
 try:
+    import ConfigParser as configparser
+except:
+    import configparser
+
+try:
     import pwd
 except:
     pwd = None
-
+    
 from datetime import date, datetime
 import getpass
 from inspect import currentframe
@@ -557,6 +562,48 @@ class AppBase(object):
                 else:
                     self.__app_exec__='./' + self.appName()
         return self.__app_exec__
+
+    def python2(self, path=None):
+        if not hasattr(self,"__python_checked__"):
+            self.check_python()
+        if not hasattr(self, "__python2__"):
+            self.__python2__=""
+        if path is not None:
+            self.__python2__=path
+            return self
+        else:
+            return self.__python2__
+
+    def python3(self, path=None):
+        if not hasattr(self,"__python_checked__"):
+            self.check_python()
+        if not hasattr(self, "__python3__"):
+            self.__python3__=""
+        if path is not None:
+            self.__python3__=path
+            return self
+        else:
+            return self.__python3__
+
+    def check_python(self):
+        self.cmd_history("# ** Checking python version  **")
+        python2 = self.which_cmd("python2")
+        if python2 == '':
+            python = self.which_cmd("python")
+            if python != "":
+                result , stdout = self.shell(f"{python} --version")
+                if result:
+                    id_array = stdout.strip().split(' ')
+                    if len(id_array) > 2:
+                        version_array = id_array[1].split(".")
+                        version = version_array[0]
+                        if int(version) == 2:
+                            python2 = python
+        python3 = self.which_cmd("python3")
+        self.__python2__ = python2
+        self.__python3__ = python3
+        self.__python_checked__ = True
+
 
     def check_system_and_user(self):
         # is_linux() Check if not windows and not macOS
@@ -1161,7 +1208,25 @@ class AppBase(object):
         else:
             self.__executable__ = ''
         return self.__executable__ 
-    
+
+    def findConfig(self, ini_name='cy-master.ini'):
+        pathToken = os.path.abspath(".").split('/')
+        path = "/".join(pathToken)
+        self.configFile( "" )
+        while len(pathToken) > 0:
+            path = "/".join(pathToken)
+            pathToken.pop()
+            if path == '' :
+                configFile = f'/{ini_name}'
+            else :
+                configFile = f"{path}/{ini_name}" 
+            if self.pathexists( configFile ) :
+                self.infoMsg("Configuation file: '%s' !" % configFile, "CONFIG FOUND")
+                self.configFile( configFile )
+                self.projectPath( path )
+                return True
+        return False
+
     def fromPipe(self):
         return self.thisFile() == '<stdin>'
 
@@ -1289,7 +1354,7 @@ class AppBase(object):
                 self.cmd_history(cmd)
                 self.shell(cmd, ignoreErr=True)
                 installed = True
-            elif self.osVersion().startswith('CentOS'):
+            elif self.is_redhat():
                 if self.is_sudo():
                     cmd = "sudo yum install -y %s" % package
                 else:
@@ -1297,7 +1362,7 @@ class AppBase(object):
                 self.cmd_history(cmd)
                 self.shell(cmd, ignoreErr=True)
                 installed = True
-            elif self.is_fedora:
+            elif self.is_fedora():
                 if self.is_sudo():
                     cmd = "sudo dnf install -y %s" % package
                 else:
@@ -1305,7 +1370,16 @@ class AppBase(object):
                 self.cmd_history(cmd)
                 self.shell(cmd, ignoreErr=True)
                 installed = True
+            elif self.is_opensuse():
+                if self.is_sudo():
+                    cmd = "sudo zypper install -y %s" % package
+                else:
+                    cmd = "zypper install -y %s" % package
+                self.cmd_history(cmd)
+                self.shell(cmd, ignoreErr=True)
+                installed = True
             else:
+                self.cmd_history("  # Not compatible OS")
                 self.msg_not_compatible_os()
             if installed:
                 if path is not None and package is not None:
@@ -1319,6 +1393,39 @@ class AppBase(object):
                 else:
                     installed = False
         return installed
+
+    def install_python_dev(self):
+        if self.python2() != '':
+            self.cmd_history("  # python2 found! ")
+            if self.is_alpine():
+                self.install_package('python2-dev')
+            elif self.is_debian():
+                self.install_package('python-dev')
+            elif self.is_fedora():
+                self.install_package('python2-devel')
+            elif self.is_redhat():
+                self.install_package('python-devel')    
+            elif self.is_opensuse():
+                self.install_package('python-devel')
+            else:
+                self.install_package('python-devel')
+        if self.python3() != '':
+            self.cmd_history("  # python3 found")
+            if self.is_alpine():
+                self.install_package('python3-dev')
+            elif self.is_debian():
+                self.install_package('python3-dev')
+            elif self.is_fedora():
+                self.install_package('python3-devel')
+            elif self.is_redhat():
+                self.install_package('python3-devel')
+            elif self.is_opensuse():
+                self.install_package('python3-devel')
+            else:
+                self.install_package('pytho3-devel')
+        if self.python3() == '' and self.python2() == '':
+            self.cmd_history("  # Both python2 and python3 not found! ")
+
 
     def install_python_package(self, package=None):
         self.history_install_package('jupyter', currentframe().f_lineno)
@@ -1538,6 +1645,12 @@ class AppBase(object):
             self.__is_local__=self.thisFile() == self.localInstallPath()
         return self.__is_local__
 
+    def is_opensuse(self):
+        return self.osVersion().startswith('openSUSE')
+
+    def is_redhat(self):
+        return self.osVersion().startswith('CentOS') or self.osVersion().startswith('Red Hat')
+
     def is_sudo(self, sudo=None):
         if sudo is not None:
             self.__isSudo__=sudo
@@ -1608,10 +1721,17 @@ class AppBase(object):
                 fin = self.open("/etc/os-release", "rt", use_history=False)
                 self.__distro__ = ''
                 for line in fin:
+                    line = line.strip()
                     if line.startswith('PRETTY_NAME='):
-                        self.__distro__ = line.split('"')[1]
+                        if '"' in line:
+                            self.__distro__ = line.split('"')[1]
+                        else:
+                            self.__distro__ = line.split('=')[1]
                     if line.startswith('VERSION_ID='):
-                        version_id = line.split('"')[1]
+                        if '"' in line:
+                            version_id = line.split('"')[1]
+                        else:
+                            version_id = line.split('=')[1]
                         if "." in version_id:
                             major = version_id.split(".")[0]
                             minor = version_id.split(".")[1]
@@ -1791,7 +1911,10 @@ class AppBase(object):
         if self.appPath() != '' :
             if len(sys.argv) > 1:
                 self.cmd(sys.argv[1])
-                if self.cmd() == "self-install" or self.cmd() == "install" or self.cmd() == "update":
+                if self.cmd()== "help": 
+                    self.help()
+                    return True
+                elif self.cmd() == "self-install" or self.cmd() == "install" or self.cmd() == "update":
                     self.start_install()
                     return True
                 elif self.cmd() == "check-system":
@@ -1839,9 +1962,11 @@ class AppBase(object):
                 return True
         elif self.allowSelfInstall():
             if self.fromPipe():
-                result = self.download_and_install(verbal=True)
+                result = self.download_and_install(verbal=False)
+                if hasattr(self,"requisite") and callable(self.requisite):
+                    self.requisite()
+                self.cmd_history_print(currentframe().f_lineno)
                 if not result:
-                    self.cmd_history_print(currentframe().f_lineno)
                     self.msg_installation_failed()
                 return True
             else:
@@ -2868,9 +2993,36 @@ class AppBase(object):
         self.cmd_history(cmd)
         self.shell(cmd,ignoreErr=True)
 
+    def help(self):
+        cmd_list=list(self.__sub_command__.keys())
+        cmd_list.sort()
+        self.prn("%s [%s]" % (self.appExec(), "|".join(cmd_list)))
+
     def usage(self, para=None):
         if not hasattr(self,'__para__'):
             self.__para__=''
+        if not hasattr(self,''):
+            self.__sub_command__={}
+            self.__sub_command__["install"] = True
+            self.__sub_command__["update"] = True
+            self.__sub_command__["check-system"] = True
+            self.__sub_command__["this"] = True
+            self.__sub_command__["this-file"] = True
+            self.__sub_command__["download"] = True
+            self.__sub_command__["download-app"] = True
+            self.__sub_command__["download-target-app"] = True
+            self.__sub_command__["global-installation-path"] = True
+            self.__sub_command__["local-installation-path"] = True
+            self.__sub_command__["timestamp"] = True
+            self.__sub_command__["today"] = True
+            self.__sub_command__["help"] = True
+            self.__sub_command__["check-update"] = True
+            self.__sub_command__["check-version"] = True
+
+            if para is not None:
+                for subcmd in para.split(","):
+                    if subcmd !="":
+                        self.__sub_command__[subcmd]=True                
         if para is not None:
             self.__para__=para
             return self
@@ -3359,11 +3511,6 @@ class AppBase(object):
     def msg_wrong_shell(self, cmd="", title=""):
         self.infoMsg("You are using wrong shell to execute: '%s'" % cmd)
 
-try:
-    import ConfigParser as configparser
-except:
-    import configparser
-
 class CyMaster(AppBase):
 
     def check_setup_py(self, version):
@@ -3384,6 +3531,7 @@ class CyMaster(AppBase):
             file = self.open(setup_py,'w')
             file.write('\n'.join(lines))
             file.close()
+            self.chmod_x(setup_py)
 
     def cy3_build_lib(self):
         src_dir = '%s/%s' % (self.projectPath(), self.srcDir())
@@ -3436,15 +3584,13 @@ class CyMaster(AppBase):
 
     def ask_choose_python_version(self):
         # fromPipe() usually involve from curl and don't have stdin
-        python2 = self.which_cmd("python2")
-        python3 = self.which_cmd("python3")
-        if python2 == '' and python3 != '':
+        if self.python2() == '' and self.python3() != '':
             self.prn("  A. Only python3 has been found!")
             return 3
-        if python2 != '' and python3 == '':
+        if self.python2() != '' and self.python3() == '':
             self.prn("  A. Only python2 has been found!")
             return 2
-        if python2 == '' and python3 == '':
+        if self.python2() == '' and self.python3() == '':
             self.critical("  You should either install python2 or python3!")
             return None
         if self.fromPipe():
@@ -3653,33 +3799,15 @@ class CyMaster(AppBase):
                     return True
         return False
 
-    def findConfig(self, ini_name='cy-master.ini'):
-        pathToken = os.path.abspath(".").split("/")
-        path = "/".join(pathToken)
-        self.configFile( '' )
-        while len(pathToken) > 0:
-            path = "/".join(pathToken)
-            pathToken.pop()
-            if path == '' :
-                configFile = f'/{ini_name}'
-            else :
-                configFile = f"{path}/{ini_name}" 
-            if self.pathexists( configFile ) :
-                self.infoMsg("Configuation file: '%s' !" % configFile, "CONFIG FOUND")
-                self.configFile( configFile )
-                self.projectPath( path )
-                return True
-        return False
-
     def parseArgs2(self):
         result=False
         if len(sys.argv) == 2:
             self.cmd(sys.argv[1])
             if self.cmd() == 'clean':
                 if self.checkConfig():
-                    self.cmd_history('# ** clean folders **')
+                    self.cmd_history("# ** clean folders **")
                     if self.buildFolder != '/':
-                        cmd=f'rm -rf {self.buildFolder()}'
+                        cmd=f"rm -rf {self.buildFolder()}"
                         self.cmd_history(cmd)
                         self.removeFolder(self.buildFolder())
                         self.cmd_history_print()
@@ -3687,10 +3815,10 @@ class CyMaster(AppBase):
             return False
         elif len(sys.argv) == 1:
             cython=self.which_cmd('cython')
-            if cython=='':
-                self.criticalMsg("This program require cython.\n  Type '%s self-install' to setup." % self.selfLocation(), "PACKAGE REQUIRED")
-                exit()
             if self.fromPipe():
+                return False
+            if cython=='':
+                self.infoMsg("This program require cython.\n  You need to install this program and then run the 'self-install' subcommand to setup.", "PACKAGE REQUIRED")
                 return False
             if self.checkConfig():
                 version = self.ask_choose_python_version()
@@ -3713,15 +3841,32 @@ class CyMaster(AppBase):
                     self.build_binary(version)
                 elif mode == 2:
                     self.build_lib(version)
-                    if self.pathexists('src') and self.srcFolder() != f'{self.projectPath()}/src':
-                        if 'yes' == self.__ask_yesno__('Do you wanted to copy folder "build/lib" to folder "src"? '):
-                            self.cmd(f'cp -rP build/lib src/')
+                    projectSrc = '%s/src' % self.projectPath()
+                    buildLib = f'{self.projectPath()}/build/lib/'
+                    self.cmd_history(f'# ** Checking output in {buildLib} **')
+                    self.history_ls(buildLib)
+                    targetSo = ''
+                    for file in os.listdir(buildLib):
+                        if file.endswith('.so'):
+                            targetSo = file
+                    if targetSo != '':
+                        self.cmd_history(f'# {targetSo} found! ')
+                        if self.pathexists(projectSrc) and self.srcFolder() != projectSrc:
+                            if 'yes' == self.__ask_yesno__('Do you wanted to copy folder "build/lib" to folder "src" (yes/no)? '):
+                                self.cmd_history('# ** Copy build files to source folder **')
+                                cmd = f'cp -rP {buildLib} {projectSrc}'
+                                self.cmd_history(cmd)
+                                result, stdout = self.shell(cmd)
+                                if not result:
+                                    self.prn(stdout)
                 self.cmd_history_print()
+                if targetSo == '':
+                    self.criticalMsg("Error in Compilation.","COMPILATION FAILED")
+                    return True
                 if mode == 1:
                     self.safeMsg("Compile into binary file!", "Build Success")
                 elif mode == 2:
                     self.safeMsg("Compile into library file!", "Build Success")
-
         return True
 
     def requisite(self):
@@ -3736,6 +3881,7 @@ class CyMaster(AppBase):
             cython = self.which_cmd('cython')
             if cython == '':
                 self.install_python_package('cython')
+        self.install_python_dev()
 
     def start(self):
         self.allowInstallLocal(True).allowDisplayInfo(True).allowSelfInstall(True)
@@ -3746,5 +3892,5 @@ class CyMaster(AppBase):
 
 if __name__ == "__main__":
     app = CyMaster()
-    app.setInstallation(appName='cy-master',author='Cloudgen Wong',homepage="https://github.com/cloudgen/cy-master",downloadUrl="https://dl.leolio.page/cy-master",lastUpdate='2024-1-5',majorVersion=1,minorVersion=5)
+    app.setInstallation(appName='cy-master',author='Cloudgen Wong',homepage="https://github.com/cloudgen/cy-master",downloadUrl="https://dl.leolio.page/cy-master",lastUpdate='2024-1-9',majorVersion=1,minorVersion=9)
     app.start()
